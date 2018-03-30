@@ -78,7 +78,9 @@ class RmqTaskSubscriber(messages.BaseConnectionWithExchange):
 
     def add_task_subscriber(self, subscriber):
         if not self._subscribers:
-            self._consumer_tag = self.channel().basic_consume(self._on_task, self._task_queue)
+            self._consumer_tag = self.channel().basic_consume(
+                queue=self._task_queue,
+                on_message_callback=self._on_task)
         self._subscribers.append(subscriber)
 
     def remove_task_subscriber(self, subscriber):

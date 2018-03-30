@@ -88,7 +88,6 @@ class RmqConnector(object):
                 self._connection_params,
                 on_open_callback=self._on_connection_open,
                 on_close_callback=self._on_connection_closed,
-                stop_ioloop_on_close=False,
                 custom_ioloop=self._loop)
 
         return self._connecting_future
@@ -127,46 +126,30 @@ class RmqConnector(object):
         channel.close()
         return future
 
-    def exchange_declare(self, channel, nowait=False, **kwargs):
+    def exchange_declare(self, channel, **kwargs):
         params = dict(kwargs)
-        params['nowait'] = nowait
-        if nowait:
-            callback = None
-            future = None
-        else:
-            future = kiwipy.Future()
-            callback = future.set_result
-        params['callback'] = callback
+        future = kiwipy.Future()
+        params['callback'] = future.set_result
 
         LOGGER.info('Declaring exchange {}'.format(params))
         channel.exchange_declare(**params)
         return future
 
-    def queue_declare(self, channel, nowait=False, **kwargs):
+    def queue_declare(self, channel, **kwargs):
         params = dict(kwargs)
-        params['nowait'] = nowait
-        if nowait:
-            callback = None
-            future = None
-        else:
-            future = kiwipy.Future()
-            callback = future.set_result
-        params['callback'] = callback
+        future = kiwipy.Future()
+        params['callback'] = future.set_result
+        # Needs a queue, even if empty
+        params.setdefault('queue', '')
 
         LOGGER.info('Declaring queue {}'.format(params))
         channel.queue_declare(**params)
         return future
 
-    def queue_bind(self, channel, nowait=False, **kwargs):
+    def queue_bind(self, channel, **kwargs):
         params = dict(kwargs)
-        params['nowait'] = nowait
-        if nowait:
-            callback = None
-            future = None
-        else:
-            future = kiwipy.Future()
-            callback = future.set_result
-        params['callback'] = callback
+        future = kiwipy.Future()
+        params['callback'] = future.set_result
 
         LOGGER.info('Binding queue {}'.format(params))
         channel.queue_bind(**params)

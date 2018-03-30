@@ -273,7 +273,10 @@ class BasePublisherWithReplyQueue(pubsub.ConnectionListener, Publisher):
             arguments={"x-expires": 60000}
         )
 
-        self._channel.basic_consume(self._on_response, no_ack=True, queue=self._reply_queue)
+        self._channel.basic_consume(
+            queue=self._reply_queue,
+            on_message_callback=self._on_response,
+            auto_ack=True)
 
     @coroutine
     def disconnect(self):

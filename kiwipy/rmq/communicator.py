@@ -117,7 +117,7 @@ class RmqSubscriber(pubsub.ConnectionListener):
             queue=rpc_queue,
             exchange=self._exchange_name,
             routing_key='{}.*'.format(defaults.RPC_TOPIC))
-        channel.basic_consume(self._on_rpc, queue=rpc_queue)
+        channel.basic_consume(queue=rpc_queue, on_message_callback=self._on_rpc)
 
         # Broadcast queue
         frame = yield connector.queue_declare(channel, exclusive=True, auto_delete=True)
@@ -127,7 +127,7 @@ class RmqSubscriber(pubsub.ConnectionListener):
             queue=broadcast_queue,
             exchange=self._exchange_name,
             routing_key=defaults.BROADCAST_TOPIC)
-        channel.basic_consume(self._on_broadcast, queue=broadcast_queue)
+        channel.basic_consume(queue=broadcast_queue, on_message_callback=self._on_broadcast)
 
         self._channel = channel
         # Have we been called externally?  In which case activate

@@ -36,16 +36,18 @@ setup(
     # http://blog.miguelgrinberg.com/post/the-package-dependency-blues
     # for a useful dicussion
     install_requires=[
-        'tornado',
-        'future'
+        'tornado>=4.0, <5.0',
+        'future',
+        'pika>=1.0.0b1, <2.0',
+        'pyyaml>=3.0, <4.0'
     ],
     extras_require={
-        'rmq': ['pika', 'tornado', 'pyyaml'],
         'dev': ['pytest', 'pytest-cov', 'ipython', 'twine'],
         ':python_version<"3.5"': ['typing'],
         ':python_version<"3.4"': ['enum34'],
         ':python_version<"3.2"': ['backports.tempfile']
     },
+    dependency_links=['https://github.com/pika/pika/tarball/master#egg=pika-1.0.0b1'],
     packages=['kiwipy', 'kiwipy.rmq'],
     test_suite='test'
 )
