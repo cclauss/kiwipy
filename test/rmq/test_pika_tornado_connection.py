@@ -1,10 +1,12 @@
 """blocking adapter test"""
 from datetime import datetime
+from datetime import timedelta
 import functools
 import logging
 import socket
 import threading
 import time
+import sys
 import tornado.gen
 from tornado.gen import coroutine, Return
 from tornado.testing import gen_test, AsyncTestCase
@@ -54,14 +56,28 @@ def setUpModule():
 class BlockingTestCaseBase(AsyncTestCase):
     TIMEOUT = DEFAULT_TIMEOUT
 
+    def __init__(self, methodName='runTest'):
+        super(BlockingTestCaseBase, self).__init__(methodName)
+        self._cleanup_coros = []
+
+    def tearDown(self):
+        self.doCoroCleanups()
+        super(BlockingTestCaseBase, self).tearDown()
+
     @coroutine
     def _connect(self,
                  url=DEFAULT_URL,
                  connection_class=kiwipy.rmq.TornadoConnection):
         parameters = pika.URLParameters(url)
         connection = connection_class(parameters)
-        self.addCleanup(lambda: connection.close()
-        if connection.is_open else None)
+        self.addCoroCleanup(lambda: (yield connection.close()) if connection.is_open else None)
+
+        @coroutine
+        def clean():
+            if connection.is_open:
+                yield connection.close()
+
+        self.addCoroCleanup(clean)
 
         # We use impl's timer directly in order to get a callback regardless
         # of BlockingConnection's event dispatch modality
@@ -115,12 +131,13 @@ class BlockingTestCaseBase(AsyncTestCase):
                           'via ioloop.process_timeouts(): {!r}'.format(exc))
 
         connection._impl.ioloop.process_timeouts = my_process_timeouts
-        self.addCleanup(setattr, connection._impl.ioloop, 'process_timeouts',
-                        real_process_timeouts)
+        # self.addCleanup(setattr, connection._impl.ioloop, 'process_timeouts',
+        # real_process_timeouts)
 
     def _on_test_timeout(self):
         """Called when test times out"""
         LOGGER.info('%s TIMED OUT (%s)', datetime.utcnow(), self)
+        self.stop()
         self.fail('Test timed out')
 
     @retry_assertion(TIMEOUT / 2)
@@ -131,6 +148,32 @@ class BlockingTestCaseBase(AsyncTestCase):
                                                  expected_count):
         frame = yield channel.queue_declare(queue, passive=True)
         self.assertEqual(frame.method.message_count, expected_count)
+
+    def addCleanup(self, coro_or_func, *args, **kwargs):
+        if tornado.gen.is_coroutine_function(coro_or_func):
+            self.addCoroCleanup(coro_or_func, *args, **kwargs)
+        else:
+            super(BlockingTestCaseBase, self).addCleanup(coro_or_func, *args, **kwargs)
+
+    def addCoroCleanup(self, coro, *args, **kwargs):
+        coro_ = kiwipy.rmq.tornado_connection.ensure_coroutine(coro)
+        self._cleanup_coros.append((coro_, args, kwargs))
+
+    def doCoroCleanups(self):
+        """Execute all cleanup functions. Normally called for you during
+        tearDown."""
+        result = self._resultForDoCleanups
+        ok = True
+        while self._cleanup_coros:
+            coro, args, kwargs = self._cleanup_coros.pop(-1)
+            try:
+                self.io_loop.run_sync(lambda: coro(*args, **kwargs))
+            except KeyboardInterrupt:
+                raise
+            except:
+                ok = False
+                result.addError(self, sys.exc_info())
+        return ok
 
 
 class TestCreateAndCloseConnection(BlockingTestCaseBase):
@@ -265,7 +308,7 @@ class TestCreateAndCloseConnectionWithChannelAndConsumer(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield self._connect()).channel()).queue_delete(q_name))
+        self.addCoroCleanup(lambda: (yield (yield self._connect()).channel()).queue_delete(q_name))
 
         # Publish the message to the queue by way of default exchange
         yield ch.publish(exchange='', routing_key=q_name, body=body1)
@@ -365,7 +408,7 @@ class TestConnectWithDownedBroker(BlockingTestCaseBase):
 #             local_linger_args=(1, 0))
 #
 #         fwd.start()
-#         self.addCleanup(lambda: fwd.stop() if fwd.running else None)
+#         #self.addCleanup(lambda: fwd.stop() if fwd.running else None)
 #
 #         class MySelectConnection(pika.SelectConnection):
 #             assert hasattr(pika.SelectConnection, '_on_connection_start')
@@ -390,7 +433,7 @@ class TestConnectWithDownedBroker(BlockingTestCaseBase):
 #             remote_addr=(DEFAULT_PARAMS.host, DEFAULT_PARAMS.port),
 #             local_linger_args=(1, 0))
 #         fwd.start()
-#         self.addCleanup(lambda: fwd.stop() if fwd.running else None)
+#         #self.addCleanup(lambda: fwd.stop() if fwd.running else None)
 #
 #         class MySelectConnection(pika.SelectConnection):
 #             assert hasattr(pika.SelectConnection, '_on_connection_tune')
@@ -416,7 +459,7 @@ class TestConnectWithDownedBroker(BlockingTestCaseBase):
 #             local_linger_args=(1, 0))
 #
 #         fwd.start()
-#         self.addCleanup(lambda: fwd.stop() if fwd.running else None)
+#         #self.addCleanup(lambda: fwd.stop() if fwd.running else None)
 #
 #         class MySelectConnection(pika.SelectConnection):
 #             assert hasattr(pika.SelectConnection, '_on_connected')
@@ -582,7 +625,10 @@ class TestAddTimeoutRemoveTimeout(BlockingTestCaseBase):
             0.001,
             lambda: rx_callback.set_result(time.time()))
         connection.remove_timeout(timer_id)
-        tornado.gen.with_timeout(time.time() + 0.1, rx_callback)
+        try:
+            yield tornado.gen.with_timeout(timedelta(seconds=0.1), rx_callback)
+        except tornado.gen.TimeoutError:
+            pass
         self.assertFalse(rx_callback.done())
 
 
@@ -606,7 +652,7 @@ class TestViabilityOfMultipleTimeoutsWithSameDeadlineAndCallback(BlockingTestCas
 
         # Wait for second timer to fire
         start_wait_time = time.time()
-        yield tornado.gen.with_timeout(start_wait_time + 0.25, rx_callback)
+        yield tornado.gen.with_timeout(timedelta(seconds=0.25), rx_callback)
 
         self.assertEqual(rx_callback.result(), 1)
 
@@ -687,7 +733,7 @@ class TestExchangeDeclareAndDelete(BlockingTestCaseBase):
 
         # Declare a new exchange
         frame = yield ch.exchange_declare(name, exchange_type='direct')
-        self.addCleanup((yield connection.channel()).exchange_delete, name)
+        self.addCoroCleanup(lambda: (yield (yield connection.channel()).exchange_delete(name)))
 
         self.assertIsInstance(frame.method, pika.spec.Exchange.DeclareOk)
 
@@ -726,13 +772,13 @@ class TestExchangeBindAndUnbind(BlockingTestCaseBase):
 
         # Declare both exchanges
         yield ch.exchange_declare(src_exg_name, exchange_type='direct')
-        self.addCleanup(lambda: (yield (yield connection.channel()).exchange_delete(src_exg_name)))
+        self.addCoroCleanup(lambda: (yield (yield connection.channel()).exchange_delete(src_exg_name)))
         yield ch.exchange_declare(dest_exg_name, exchange_type='direct')
-        self.addCleanup(lambda: (yield (yield connection.channel()).exchange_delete(dest_exg_name)))
+        self.addCoroCleanup(lambda: (yield (yield connection.channel()).exchange_delete(dest_exg_name)))
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield self._connect()).channel()).queue_delete(q_name))
+        self.addCoroCleanup(lambda: (yield (yield self._connect()).channel()).queue_delete(q_name))
 
         # Bind the queue to the destination exchange
         yield ch.queue_bind(q_name, exchange=dest_exg_name, routing_key=routing_key)
@@ -778,7 +824,7 @@ class TestQueueDeclareAndDelete(BlockingTestCaseBase):
 
         # Declare a new queue
         frame = yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         self.assertIsInstance(frame.method, pika.spec.Queue.DeclareOk)
 
@@ -832,11 +878,11 @@ class TestQueueBindAndUnbindAndPurge(BlockingTestCaseBase):
 
         # Declare a new exchange
         yield ch.exchange_declare(exg_name, exchange_type='direct')
-        self.addCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
+        self.addCoroCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Bind the queue to the exchange using routing key
         frame = yield ch.queue_bind(q_name, exchange=exg_name,
@@ -902,7 +948,7 @@ class TestBasicGet(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
         LOGGER.info('%s DECLARED QUEUE (%s)', datetime.utcnow(), self)
 
         # Verify result of getting a message from an empty queue
@@ -958,7 +1004,7 @@ class TestBasicReject(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Deposit two messages in the queue via default exchange
         yield ch.publish(exchange='', routing_key=q_name,
@@ -1004,7 +1050,7 @@ class TestBasicRejectNoRequeue(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Deposit two messages in the queue via default exchange
         yield ch.publish(exchange='', routing_key=q_name,
@@ -1049,7 +1095,7 @@ class TestBasicNack(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Deposit two messages in the queue via default exchange
         yield ch.publish(exchange='', routing_key=q_name,
@@ -1095,7 +1141,7 @@ class TestBasicNackNoRequeue(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Deposit two messages in the queue via default exchange
         yield ch.publish(exchange='', routing_key=q_name,
@@ -1140,7 +1186,7 @@ class TestBasicNackMultiple(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Deposit two messages in the queue via default exchange
         yield ch.publish(exchange='', routing_key=q_name,
@@ -1197,7 +1243,7 @@ class TestBasicRecoverWithRequeue(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Deposit two messages in the queue via default exchange
         yield ch.publish(exchange='', routing_key=q_name,
@@ -1245,7 +1291,7 @@ class TestTxCommit(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Select standard transaction mode
         frame = yield ch.tx_select()
@@ -1283,7 +1329,7 @@ class TestTxRollback(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Select standard transaction mode
         frame = yield ch.tx_select()
@@ -1341,7 +1387,7 @@ class TestPublishAndBasicPublishWithPubacksUnroutable(BlockingTestCaseBase):
 
         # Declare a new exchange
         yield ch.exchange_declare(exg_name, exchange_type='direct')
-        self.addCleanup(lambda: (yield (yield (connection.channel()).exchange_delete(exg_name))))
+        self.addCoroCleanup(lambda: (yield (yield (connection.channel()).exchange_delete(exg_name))))
 
         # Verify unroutable message handling using basic_publish
         res = yield ch.basic_publish(exg_name, routing_key=routing_key, body='',
@@ -1380,7 +1426,7 @@ class TestConfirmDeliveryAfterUnroutableMessage(BlockingTestCaseBase):
 
         # Declare a new exchange
         yield ch.exchange_declare(exg_name, exchange_type='direct')
-        self.addCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
+        self.addCoroCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
 
         # Register on-return callback
         returned_messages = []
@@ -1393,16 +1439,6 @@ class TestConfirmDeliveryAfterUnroutableMessage(BlockingTestCaseBase):
 
         # Select delivery confirmations
         yield ch.confirm_delivery()
-
-        # # Verify that unroutable message is in pending events
-        # self.assertEqual(len(ch._pending_events), 1)
-        # self.assertIsInstance(ch._pending_events[0],
-        #                       blocking_connection._ReturnedMessageEvt)
-        # # Verify that repr of _ReturnedMessageEvt instance does crash
-        # repr(ch._pending_events[0])
-        #
-        # # Dispach events
-        # connection.process_data_events()
 
         # Verify that unroutable message was dispatched
         ((channel, method, properties, body,),) = returned_messages
@@ -1430,7 +1466,7 @@ class TestUnroutableMessagesReturnedInNonPubackMode(BlockingTestCaseBase):
 
         # Declare a new exchange
         yield ch.exchange_declare(exg_name, exchange_type='direct')
-        self.addCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
+        self.addCoroCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
 
         # Register on-return callback
         all_returned = kiwipy.Future()
@@ -1489,7 +1525,7 @@ class TestUnroutableMessageReturnedInPubackMode(BlockingTestCaseBase):
 
         # Declare a new exchange
         yield ch.exchange_declare(exg_name, exchange_type='direct')
-        self.addCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
+        self.addCoroCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
 
         # Select delivery confirmations
         yield ch.confirm_delivery()
@@ -1551,11 +1587,11 @@ class TestBasicPublishDeliveredWhenPendingUnroutable(BlockingTestCaseBase):
 
         # Declare a new exchange
         yield ch.exchange_declare(exg_name, exchange_type='direct')
-        self.addCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
+        self.addCoroCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Bind the queue to the exchange using routing key
         ch.queue_bind(q_name, exchange=exg_name, routing_key=routing_key)
@@ -1624,11 +1660,11 @@ class TestPublishAndConsumeWithPubacksAndQosOfOne(BlockingTestCaseBase):
 
         # Declare a new exchange
         yield ch.exchange_declare(exg_name, exchange_type='direct')
-        self.addCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
+        self.addCoroCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Bind the queue to the exchange using routing key
         yield ch.queue_bind(q_name, exchange=exg_name, routing_key=routing_key)
@@ -1756,11 +1792,11 @@ class TestBasicConsumeWithAckFromAnotherThread(BlockingTestCaseBase):
 
         # Declare a new exchange
         yield ch.exchange_declare(exg_name, exchange_type='direct')
-        self.addCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
+        self.addCoroCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Bind the queue to the exchange using routing key
         ch.queue_bind(q_name, exchange=exg_name, routing_key=routing_key)
@@ -1860,11 +1896,11 @@ class TestConsumeGeneratorWithAckFromAnotherThread(BlockingTestCaseBase):
 
         # Declare a new exchange
         yield ch.exchange_declare(exg_name, exchange_type='direct')
-        self.addCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
+        self.addCoroCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Bind the queue to the exchange using routing key
         ch.queue_bind(q_name, exchange=exg_name, routing_key=routing_key)
@@ -1949,15 +1985,15 @@ class TestTwoBasicConsumersOnSameChannel(BlockingTestCaseBase):
 
         # Declare a new exchange
         yield ch.exchange_declare(exg_name, exchange_type='direct')
-        self.addCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
+        self.addCoroCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
 
         # Declare the two new queues and bind them to the exchange
         yield ch.queue_declare(q1_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q1_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q1_name)))
         ch.queue_bind(q1_name, exchange=exg_name, routing_key=q1_routing_key)
 
         yield ch.queue_declare(q2_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q2_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q2_name)))
         ch.queue_bind(q2_name, exchange=exg_name, routing_key=q2_routing_key)
 
         # Deposit messages in the queues
@@ -2044,11 +2080,11 @@ class TestBasicPublishWithoutPubacks(BlockingTestCaseBase):
 
         # Declare a new exchange
         yield ch.exchange_declare(exg_name, exchange_type='direct')
-        self.addCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
+        self.addCoroCleanup(lambda: (yield (yield connection.channel()).exchange_delete(exg_name)))
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Bind the queue to the exchange using routing key
         ch.queue_bind(q_name, exchange=exg_name, routing_key=routing_key)
@@ -2163,9 +2199,9 @@ class TestPublishFromBasicConsumeCallback(BlockingTestCaseBase):
 
         # Declare source and destination queues
         yield ch.queue_declare(src_q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(src_q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(src_q_name)))
         yield ch.queue_declare(dest_q_name, auto_delete=True)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(dest_q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(dest_q_name)))
 
         # Deposit a message in the source queue
         yield ch.publish('',
@@ -2213,7 +2249,7 @@ class TestStopConsumingFromBasicConsumeCallback(BlockingTestCaseBase):
 
         # Declare the queue
         yield ch.queue_declare(q_name, auto_delete=False)
-        self.addCleanup(lambda: (yield (yield connection.channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield connection.channel()).queue_delete(q_name)))
 
         # Deposit two messages in the queue
         yield ch.publish('',
@@ -2274,7 +2310,7 @@ class TestCloseChannelFromBasicConsumeCallback(BlockingTestCaseBase):
 
         # Declare the queue
         yield ch.queue_declare(q_name, auto_delete=False)
-        self.addCleanup(lambda: (yield (yield (connection.channel()).queue_delete(q_name))))
+        self.addCoroCleanup(lambda: (yield (yield (connection.channel()).queue_delete(q_name))))
 
         # Deposit two messages in the queue
         yield ch.publish('',
@@ -2328,7 +2364,7 @@ class TestCloseConnectionFromBasicConsumeCallback(BlockingTestCaseBase):
 
         # Declare the queue
         yield ch.queue_declare(q_name, auto_delete=False)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Deposit two messages in the queue
         yield ch.publish('',
@@ -2383,7 +2419,7 @@ class TestStartConsumingRaisesChannelClosedOnSameChannelFailure(BlockingTestCase
 
         # Declare the queue
         yield ch.queue_declare(q_name, auto_delete=False)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         yield ch.basic_consume(q_name,
                                lambda *args, **kwargs: None,
@@ -2423,7 +2459,7 @@ class TestStartConsumingReturnsAfterCancelFromBroker(BlockingTestCaseBase):
 
         # Declare the queue
         yield ch.queue_declare(q_name, auto_delete=False)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         consumer_tag = yield ch.basic_consume(q_name,
                                               lambda *args, **kwargs: None,
@@ -2451,7 +2487,7 @@ class TestNonPubAckPublishAndConsumeHugeMessage(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=False)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Publish a message to the queue by way of default exchange
         yield ch.publish(exchange='', routing_key=q_name, body=body)
@@ -2503,7 +2539,7 @@ class TestNonPubAckPublishAndConsumeManyMessages(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=False)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         for _ in pika.compat.xrange(num_messages_to_publish):
             # Publish a message to the queue by way of default exchange
@@ -2561,7 +2597,7 @@ class TestBasicCancelWithNonAckableConsumer(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=False)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Publish two messages to the queue by way of default exchange
         yield ch.publish(exchange='', routing_key=q_name, body=body1)
@@ -2620,7 +2656,7 @@ class TestBasicCancelWithAckableConsumer(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=False)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Publish two messages to the queue by way of default exchange
         yield ch.publish(exchange='', routing_key=q_name, body=body1)
@@ -2673,7 +2709,7 @@ class TestUnackedMessageAutoRestoredToQueueOnChannelClose(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=False)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Publish two messages to the queue by way of default exchange
         yield ch.publish(exchange='', routing_key=q_name, body=body1)
@@ -2721,7 +2757,7 @@ class TestNoAckMessageNotRestoredToQueueOnChannelClose(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=False)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Publish two messages to the queue by way of default exchange
         yield ch.publish(exchange='', routing_key=q_name, body=body1)
@@ -2856,7 +2892,7 @@ class TestConsumeGeneratorPassesChannelClosedOnSameChannelFailure(BlockingTestCa
 
         # Declare the queue
         yield ch.queue_declare(q_name, auto_delete=False)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Schedule a callback that will cause a channel error on the consumer's
         # channel by publishing to an unknown exchange. This will cause the
@@ -2888,7 +2924,7 @@ class TestChannelFlow(BlockingTestCaseBase):
 
         # Declare a new queue
         yield ch.queue_declare(q_name, auto_delete=False)
-        self.addCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
+        self.addCoroCleanup(lambda: (yield (yield (yield self._connect()).channel()).queue_delete(q_name)))
 
         # Verify zero active consumers on the queue
         frame = yield ch.queue_declare(q_name, passive=True)

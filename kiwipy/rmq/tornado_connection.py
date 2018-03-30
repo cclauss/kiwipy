@@ -140,11 +140,11 @@ class TornadoConnection(object):
 
     @coroutine
     def close(self, reply_code=200, reply_text='Normal shutdown'):
-        self._close_future = Future()
         if self.is_closing or self.is_closed:
             LOGGER.warning('Suppressing close request on %s', self)
             return
 
+        self._close_future = Future()
         self._impl.close(reply_code, reply_text)
         yield self._close_future
 
@@ -271,6 +271,9 @@ class TornadoConnection(object):
 
     def _on_close(self, connection, reply_code, reply_text):
         LOGGER.info('Connection closed: (%s) %s', reply_code, reply_text)
+
+        if not self._open_future.done():
+            self._open_future.set_exception(pika.exceptions.ConnectionClosed())
 
         if self._close_future:
             # The user has requested a close
@@ -1298,6 +1301,13 @@ class TornadoChannel(object):
         future = Future()
         try:
             self._pending_futures.append(future)
+            if self.is_closed or self._connection.is_closed:
+                if self._connection.is_closed:
+                    exception = pika.exceptions.ConnectionClosed()
+                else:
+                    exception = pika.exceptions.ChannelClosed()
+                future.set_exception(exception)
+
             yield future
         finally:
             self._pending_futures.remove(future)
