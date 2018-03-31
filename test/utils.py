@@ -1,6 +1,8 @@
 from future.utils import with_metaclass
 import abc
 import kiwipy
+from kiwipy import rmq
+import unittest
 
 
 class CommunicatorTester(with_metaclass(abc.ABCMeta)):
@@ -221,3 +223,15 @@ class CommunicatorTester(with_metaclass(abc.ABCMeta)):
         # Check that we're unsubscribed
         with self.assertRaises((kiwipy.UnroutableError, kiwipy.TimeoutError)):
             self.communicator.rpc_send_and_wait(rpc_subscriber.__name__, None, timeout=self.WAIT_TIMEOUT)
+
+
+class TestCaseWithLoop(unittest.TestCase):
+    def setUp(self):
+        super(TestCaseWithLoop, self).setUp()
+        self.loop = rmq.new_event_loop()
+        rmq.set_event_loop(self.loop)
+
+    def tearDown(self):
+        self.loop.close()
+        self.loop = None
+        rmq.set_event_loop(None)

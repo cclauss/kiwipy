@@ -1,19 +1,12 @@
 import unittest
 import uuid
+import pika
+from kiwipy import rmq
 
-import kiwipy
-
-from . import utils
-from ..utils import CommunicatorTester
-
-try:
-    import pika
-    from kiwipy import rmq
-except ImportError:
-    pika = None
+import utils
+from utils import CommunicatorTester
 
 
-@unittest.skipIf(not pika, "Requires pika library and RabbitMQ")
 class TestCommunicator(CommunicatorTester, utils.TestCaseWithLoop):
     def create_communicator(self):
         self.connector = rmq.RmqConnector('amqp://guest:guest@localhost:5672/', loop=self.loop)
@@ -34,7 +27,6 @@ class TestCommunicator(CommunicatorTester, utils.TestCaseWithLoop):
         communicator.disconnect()
 
 
-@unittest.skipIf(not pika, "Requires pika library and RabbitMQ")
 class TestCommunicatorDroppyConnection(utils.TestCaseWithLoop):
     def setUp(self):
         super(TestCommunicatorDroppyConnection, self).setUp()

@@ -61,7 +61,7 @@ class BlockingTestCaseBase(AsyncTestCase):
         self._cleanup_coros = []
 
     def tearDown(self):
-        self.doCoroCleanups()
+        self.io_loop.run_sync(self.doCoroCleanups)
         super(BlockingTestCaseBase, self).tearDown()
 
     @coroutine
@@ -159,21 +159,25 @@ class BlockingTestCaseBase(AsyncTestCase):
         coro_ = kiwipy.rmq.tornado_connection.ensure_coroutine(coro)
         self._cleanup_coros.append((coro_, args, kwargs))
 
+    @coroutine
     def doCoroCleanups(self):
         """Execute all cleanup functions. Normally called for you during
         tearDown."""
-        result = self._resultForDoCleanups
+        try:
+            result = self._resultForDoCleanups  # Python 2
+        except AttributeError:
+            result = self._outcome  # Python 3
         ok = True
         while self._cleanup_coros:
             coro, args, kwargs = self._cleanup_coros.pop(-1)
             try:
-                self.io_loop.run_sync(lambda: coro(*args, **kwargs))
+                yield coro(*args, **kwargs)
             except KeyboardInterrupt:
                 raise
             except:
                 ok = False
                 result.addError(self, sys.exc_info())
-        return ok
+        raise Return(ok)
 
 
 class TestCreateAndCloseConnection(BlockingTestCaseBase):

@@ -1,6 +1,5 @@
 from collections import deque, namedtuple
 import contextlib
-import functools
 import logging
 import pika
 import pika.exceptions

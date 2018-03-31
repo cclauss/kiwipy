@@ -2,7 +2,7 @@ import unittest
 import uuid
 
 import kiwipy
-from . import utils
+import utils
 
 try:
     import pika

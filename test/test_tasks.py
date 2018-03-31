@@ -1,19 +1,14 @@
+import pika
+import pika.exceptions
 import unittest
 import uuid
 
 import kiwipy
+from kiwipy import rmq
 
-from . import utils
-
-try:
-    import pika
-    import pika.exceptions
-    from kiwipy import rmq
-except ImportError:
-    pika = None
+import utils
 
 
-@unittest.skipIf(not pika, "Requires pika library and RabbitMQ")
 class TestTaskPublisher(utils.TestCaseWithLoop):
     def setUp(self):
         super(TestTaskPublisher, self).setUp()
