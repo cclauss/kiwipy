@@ -18,12 +18,6 @@ __all__ = ['RmqCommunicator']
 
 _LOGGER = logging.getLogger(__name__)
 
-
-def declare_exchange(channel, name, done_callback):
-    channel.exchange_declare(
-        done_callback, exchange=name, exchange_type='topic', auto_delete=True)
-
-
 EXCHANGE_PROPERTIES = {
     'exchange_type': 'topic',
     'auto_delete': True
@@ -104,30 +98,28 @@ class RmqSubscriber(pubsub.ConnectionListener):
             # Already connected
             return
 
-        connector = self._connector
-        channel = yield connector.open_channel()
+        connection = yield self._connector.get_connection()
+        channel = yield connection.channel()
         channel.add_on_close_callback(self._on_channel_closed)
-        yield connector.exchange_declare(channel, exchange=self._exchange_name, **EXCHANGE_PROPERTIES)
+        yield channel.exchange_declare(exchange=self._exchange_name, **EXCHANGE_PROPERTIES)
 
         # RPC queue
-        frame = yield connector.queue_declare(channel, exclusive=True, auto_delete=True)
+        frame = yield channel.queue_declare(queue='', exclusive=True, auto_delete=True)
         rpc_queue = frame.method.queue
-        result = yield connector.queue_bind(
-            channel,
+        result = yield channel.queue_bind(
             queue=rpc_queue,
             exchange=self._exchange_name,
             routing_key='{}.*'.format(defaults.RPC_TOPIC))
-        channel.basic_consume(queue=rpc_queue, on_message_callback=self._on_rpc)
+        yield channel.basic_consume(queue=rpc_queue, on_message_callback=self._on_rpc)
 
         # Broadcast queue
-        frame = yield connector.queue_declare(channel, exclusive=True, auto_delete=True)
+        frame = yield channel.queue_declare(queue='', exclusive=True, auto_delete=True)
         broadcast_queue = frame.method.queue
-        yield connector.queue_bind(
-            channel,
+        yield channel.queue_bind(
             queue=broadcast_queue,
             exchange=self._exchange_name,
             routing_key=defaults.BROADCAST_TOPIC)
-        channel.basic_consume(queue=broadcast_queue, on_message_callback=self._on_broadcast)
+        yield channel.basic_consume(queue=broadcast_queue, on_message_callback=self._on_broadcast)
 
         self._channel = channel
         # Have we been called externally?  In which case activate
@@ -139,7 +131,10 @@ class RmqSubscriber(pubsub.ConnectionListener):
     def disconnect(self):
         self._connector.remove_connection_listener(self)
         if self.channel() is not None:
-            yield self._connector.close_channel(self.channel())
+            try:
+                yield self.channel().close()
+            except (pika.exceptions.ChannelClosed, pika.exceptions.ChannelAlreadyClosing):
+                pass
             self._channel = None
 
     # region RMQ methods
@@ -280,19 +275,26 @@ class RmqCommunicator(kiwipy.Communicator):
         if self._connected:
             return
 
-        self._loop.run_sync(self._message_subscriber.connect)
-        self._loop.run_sync(self._task_subscriber.connect)
-        self._loop.run_sync(self._message_publisher.connect)
-        self._loop.run_sync(self._task_publisher.connect)
-
+        self._loop.run_sync(self._connect)
         self._connected = True
 
     def disconnect(self):
-        self._loop.run_sync(self._message_publisher.disconnect)
-        self._loop.run_sync(self._message_subscriber.disconnect)
-        self._loop.run_sync(self._task_publisher.disconnect)
-        self._loop.run_sync(self._task_subscriber.disconnect)
-        self._loop.run_sync(self._connector.disconnect)
+        self._loop.run_sync(self._disconnect)
+
+    @coroutine
+    def _connect(self):
+        yield self._message_subscriber.connect()
+        yield self._task_subscriber.connect()
+        yield self._message_publisher.connect()
+        yield self._task_publisher.connect()
+
+    @coroutine
+    def _disconnect(self):
+        yield self._message_publisher.disconnect()
+        yield self._message_subscriber.disconnect()
+        yield self._task_publisher.disconnect()
+        yield self._task_subscriber.disconnect()
+        yield self._connector.disconnect()
 
     def add_rpc_subscriber(self, subscriber, identifier):
         self._message_subscriber.add_rpc_subscriber(subscriber, identifier)

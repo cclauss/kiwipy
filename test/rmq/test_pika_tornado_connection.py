@@ -2122,7 +2122,7 @@ class TestBasicPublishWithoutPubacks(BlockingTestCaseBase):
 
         # Wait for first message to arrive
         while not rx_messages:
-            connection.process_data_events(time_limit=None)
+            yield  # Give the connection time to consume
 
         self.assertGreaterEqual(len(rx_messages), 1)
 
@@ -2148,7 +2148,7 @@ class TestBasicPublishWithoutPubacks(BlockingTestCaseBase):
 
         # Get the second message
         while len(rx_messages) < 2:
-            connection.process_data_events(time_limit=None)
+            yield  # Give the connection time to consume
 
         self.assertEqual(len(rx_messages), 2)
 

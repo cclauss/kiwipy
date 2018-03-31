@@ -4,6 +4,7 @@ from future.utils import with_metaclass
 import kiwipy
 from past.builtins import basestring
 import pika
+import pika.exceptions
 from tornado.gen import coroutine
 import uuid
 import yaml
@@ -157,12 +158,11 @@ class BaseConnectionWithExchange(pubsub.ConnectionListener):
             self._active = True
             self._connector.add_connection_listener(self)
 
-        connector = self._connector
-        channel = yield connector.open_channel()
+        connection = yield self._connector.get_connection()
+        channel = yield connection.channel()
         channel.add_on_close_callback(self._on_channel_close)
 
-        yield connector.exchange_declare(
-            channel,
+        yield channel.exchange_declare(
             exchange=self.get_exchange_name(),
             **self._exchange_params)
 
@@ -174,7 +174,10 @@ class BaseConnectionWithExchange(pubsub.ConnectionListener):
             self._is_closing = True
             self._connector.remove_connection_listener(self)
             if self.channel() is not None:
-                yield self._connector.close_channel(self.channel())
+                try:
+                    yield self.channel().close()
+                except (pika.exceptions.ChannelClosed, pika.exceptions.ChannelAlreadyClosing):
+                    pass
                 self._channel = None
             self._connector = None
 
@@ -254,26 +257,24 @@ class BasePublisherWithReplyQueue(pubsub.ConnectionListener, Publisher):
             self._active = True
             self._connector.add_connection_listener(self)
 
-        connector = self._connector
-        channel = yield connector.open_channel()
+        connection = yield self._connector.get_connection()
+        channel = yield connection.channel()
         self._channel = channel
         channel.add_on_close_callback(self._on_channel_close)
 
-        yield connector.exchange_declare(
-            channel,
+        yield channel.exchange_declare(
             exchange=self.get_exchange_name(),
             **self._exchange_params)
 
         # Declare the reply queue
-        yield connector.queue_declare(
-            channel,
+        yield channel.queue_declare(
             queue=self._reply_queue,
             exclusive=True,
             auto_delete=self._testing_mode,
             arguments={"x-expires": 60000}
         )
 
-        self._channel.basic_consume(
+        yield channel.basic_consume(
             queue=self._reply_queue,
             on_message_callback=self._on_response,
             auto_ack=True)
@@ -283,9 +284,12 @@ class BasePublisherWithReplyQueue(pubsub.ConnectionListener, Publisher):
         if not self.is_closing:
             self._is_closing = True
             self._connector.remove_connection_listener(self)
-            if self.channel() is not None and not self.channel().is_closed:
-                yield self._connector.close_channel(self.channel())
-            self._channel = None
+            if self.channel() is not None:
+                try:
+                    yield self.channel().close()
+                except (pika.exceptions.ChannelClosed, pika.exceptions.ChannelAlreadyClosing):
+                    pass
+                self._channel = None
 
     def create_publish_channel(self, connection):
         channel = connection.channel()

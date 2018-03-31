@@ -79,6 +79,9 @@ class TornadoConnection(object):
     def add_backpressure_callback(self, callback):
         return self._impl.add_backpressure_callback(_CallbackWrapper(self, callback))
 
+    def add_on_open_callback(self, callback):
+        return self._impl.add_on_open_callback(_CallbackWrapper(self, callback))
+
     def add_on_close_callback(self, callback):
         return self._impl.add_on_close_callback(_CallbackWrapper(self, callback))
 

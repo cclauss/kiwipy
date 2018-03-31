@@ -95,20 +95,20 @@ class RmqTaskSubscriber(messages.BaseConnectionWithExchange):
             return
 
         yield super(RmqTaskSubscriber, self).connect()
-        connector = self._connector
-        self.channel().basic_qos()
+        channel = self.channel()
+        assert channel, "Channel is None"
+
+        yield channel.basic_qos()
 
         # Set up task queue
         task_queue = self._task_queue
-        yield connector.queue_declare(
-            self._channel,
+        yield channel.queue_declare(
             queue=task_queue,
             durable=not self._testing_mode,
             auto_delete=self._testing_mode,
             arguments={"x-expires": 60000}
         )
-        yield connector.queue_bind(
-            self._channel,
+        yield channel.queue_bind(
             queue=task_queue,
             exchange=self._exchange_name,
             routing_key=task_queue)

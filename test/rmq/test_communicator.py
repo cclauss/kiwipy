@@ -54,10 +54,10 @@ class TestCommunicatorDroppyConnection(utils.TestCaseWithLoop):
 
     def tearDown(self):
         self._communicator.disconnect()
-        self.connector.disconnect()
+        self.loop.run_sync(self.connector.disconnect)
 
         # Have to call super after because this closes the loop
         super(TestCommunicatorDroppyConnection, self).tearDown()
 
     def test_connect_disconnect(self):
-        self.loop.run_sync(lambda: self.connector.connect())
+        self.loop.run_sync(lambda: self.connector.get_connection())
