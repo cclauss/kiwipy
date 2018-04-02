@@ -108,6 +108,7 @@ class RmqSubscriber(pubsub.ConnectionListener):
 
         # RPC queue
         frame = yield channel.queue_declare(
+            queue='',
             exclusive=True,
             arguments={"x-expires": 60000})
         rpc_queue = frame.method.queue
@@ -119,7 +120,6 @@ class RmqSubscriber(pubsub.ConnectionListener):
 
         # Broadcast queue
         frame = yield channel.queue_declare(
-            channel,
             exclusive=True,
             arguments={"x-expires": 60000})
         broadcast_queue = frame.method.queue
