@@ -20,9 +20,10 @@ __all__ = ['RmqCommunicator']
 
 _LOGGER = logging.getLogger(__name__)
 
+# The exchange properties use by the publisher and subscriber.  These have to match
+# which is why they're declare her
 EXCHANGE_PROPERTIES = {
     'exchange_type': 'topic',
-    'auto_delete': True
 }
 
 
@@ -106,7 +107,9 @@ class RmqSubscriber(pubsub.ConnectionListener):
         yield channel.exchange_declare(exchange=self._exchange_name, **EXCHANGE_PROPERTIES)
 
         # RPC queue
-        frame = yield channel.queue_declare(queue='', exclusive=True, auto_delete=True)
+        frame = yield channel.queue_declare(
+            exclusive=True,
+            arguments={"x-expires": 60000})
         rpc_queue = frame.method.queue
         result = yield channel.queue_bind(
             queue=rpc_queue,
@@ -115,7 +118,10 @@ class RmqSubscriber(pubsub.ConnectionListener):
         yield channel.basic_consume(queue=rpc_queue, on_message_callback=self._on_rpc)
 
         # Broadcast queue
-        frame = yield channel.queue_declare(queue='', exclusive=True, auto_delete=True)
+        frame = yield channel.queue_declare(
+            channel,
+            exclusive=True,
+            arguments={"x-expires": 60000})
         broadcast_queue = frame.method.queue
         yield channel.queue_bind(
             queue=broadcast_queue,
