@@ -123,6 +123,7 @@ class RmqSubscriber(pubsub.ConnectionListener):
 
         # Broadcast queue
         frame = yield channel.queue_declare(
+            queue='',
             exclusive=True,
             arguments={
                 "x-message-ttl": defaults.MESSAGE_TTL,

@@ -53,6 +53,29 @@ else:
 
             return super(Future, self).result()
 
+        def add_done_callback(self, fn):
+            """Attaches the given callback to the `Future`.
+
+            It will be invoked with the `Future` as its argument when the Future
+            has finished running and its result is available.  In Tornado
+            consider using `.IOLoop.add_future` instead of calling
+            `add_done_callback` directly.
+            """
+            if self._done:
+                from tornado.ioloop import IOLoop
+                IOLoop.current().add_callback(fn, self)
+            else:
+                self._callbacks.append(fn)
+
+        def _set_done(self):
+            self._done = True
+            if self._callbacks:
+                from tornado.ioloop import IOLoop
+                loop = IOLoop.current()
+                for cb in self._callbacks:
+                    loop.add_callback(cb, self)
+                self._callbacks = None
+
 
 def copy_future(source, target):
     """ Copy the status of future a to b unless b is already done in
