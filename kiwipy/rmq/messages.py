@@ -269,7 +269,7 @@ class BasePublisherWithReplyQueue(pubsub.ConnectionListener, Publisher):
             queue=self._reply_queue,
             exclusive=True,
             auto_delete=self._testing_mode,
-            arguments={"x-expires": 60000}
+            arguments={"x-expires": defaults.REPLY_QUEUE_EXPIRES}
         )
 
         yield channel.basic_consume(
