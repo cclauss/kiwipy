@@ -165,7 +165,7 @@ class RmqTaskSubscriber(messages.BaseConnectionWithExchange):
     def _send_response(self, correlation_id, reply_to, response):
         # Build full response
         response[utils.HOST_KEY] = utils.get_host_info()
-        yield self.channel().basic_publish(
+        yield self.channel().publish(
             exchange='',
             routing_key=reply_to,
             body=self._encode(response),

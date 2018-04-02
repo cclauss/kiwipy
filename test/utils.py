@@ -238,9 +238,11 @@ class TestCaseWithLoop(unittest.TestCase):
         rmq.set_event_loop(self.loop)
 
     def tearDown(self):
+        self.loop.run_sync(self.doCoroCleanups)
         self.loop.close()
         self.loop = None
         rmq.set_event_loop(None)
+        super(TestCaseWithLoop, self).tearDown()
 
     def addCleanup(self, coro_or_func, *args, **kwargs):
         if tornado.gen.is_coroutine_function(coro_or_func):

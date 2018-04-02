@@ -10,6 +10,8 @@ from utils import CommunicatorTester
 class TestCommunicator(CommunicatorTester, utils.TestCaseWithLoop):
     def create_communicator(self):
         self.connector = rmq.RmqConnector('amqp://guest:guest@localhost:5672/', loop=self.loop)
+        self.addCoroCleanup(lambda: self.connector.disconnect)
+
         self.exchange = "{}.{}".format(self.__class__.__name__, uuid.uuid4())
         self.task_queue = "{}.{}".format(self.__class__.__name__, uuid.uuid4())
 
@@ -21,10 +23,8 @@ class TestCommunicator(CommunicatorTester, utils.TestCaseWithLoop):
         )
 
         communicator.connect()
+        self.addCoroCleanup(lambda: communicator._disconnect)
         return communicator
-
-    def destroy_communicator(self, communicator):
-        communicator.disconnect()
 
 
 class TestCommunicatorDroppyConnection(utils.TestCaseWithLoop):

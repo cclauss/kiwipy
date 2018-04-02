@@ -1,6 +1,11 @@
 import tornado.concurrent
 from functools import partial
 
+try:
+    import asyncio
+except ImportError:
+    asyncio = None
+
 __all__ = ['Future', 'gather', 'chain', 'copy_future', 'InvalidStateError', 'CancelledError']
 
 
@@ -14,33 +19,39 @@ class CancelledError(Exception):
     pass
 
 
-class Future(tornado.concurrent.Future):
-    _cancelled = False
+if asyncio and issubclass(tornado.concurrent.Future, asyncio.Future):
+    # If tornado is using an asyncio Future then we have all we need,
+    # otherwise we redefine it below (e.g. for python 2) to have a
+    # cancel method.
+    Future = tornado.concurrent.Future
+else:
+    class Future(tornado.concurrent.Future):
+        _cancelled = False
 
-    def set_result(self, result):
-        if self.done():
-            raise InvalidStateError('Future already done')
-        super(Future, self).set_result(result)
+        def set_result(self, result):
+            if self.done():
+                raise InvalidStateError('Future already done')
+            super(Future, self).set_result(result)
 
-    def cancel(self):
-        if self.done():
-            return False
+        def cancel(self):
+            if self.done():
+                return False
 
-        self._cancelled = True
-        # Get the callbacks scheduled
-        self._set_done()
-        return True
+            self._cancelled = True
+            # Get the callbacks scheduled
+            self._set_done()
+            return True
 
-    def cancelled(self):
-        return self._cancelled
+        def cancelled(self):
+            return self._cancelled
 
-    def result(self):
-        if self.cancelled():
-            raise CancelledError
-        if not self.done():
-            raise InvalidStateError("Not done yet so no result")
+        def result(self):
+            if self.cancelled():
+                raise CancelledError
+            if not self.done():
+                raise InvalidStateError("Not done yet so no result")
 
-        return super(Future, self).result(timeout=0.)
+            return super(Future, self).result()
 
 
 def copy_future(source, target):
