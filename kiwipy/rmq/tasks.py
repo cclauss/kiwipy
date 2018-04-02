@@ -6,6 +6,7 @@ import pika
 from tornado.gen import coroutine
 import yaml
 
+import kiwipy.exceptions
 from . import defaults
 from . import messages
 from . import pubsub
@@ -132,7 +133,7 @@ class RmqTaskSubscriber(messages.BaseConnectionWithExchange):
                 # Finished
                 handled = True
                 break
-            except kiwipy.TaskRejected:
+            except kiwipy.exceptions.TaskRejected:
                 pass
             except KeyboardInterrupt:
                 raise

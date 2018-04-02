@@ -6,6 +6,8 @@ import os
 import socket
 
 # The key used in messages to give information about the host that send a message
+import kiwipy.exceptions
+
 HOST_KEY = 'host'
 HOSTNAME_KEY = 'hostname'
 PID_KEY = 'pid'
@@ -61,7 +63,7 @@ def response_to_future(response, future=None):
     if CANCELLED_KEY in response:
         future.cancel()
     elif EXCEPTION_KEY in response:
-        future.set_exception(kiwipy.RemoteException(response[EXCEPTION_KEY]))
+        future.set_exception(kiwipy.exceptions.RemoteException(response[EXCEPTION_KEY]))
     elif RESULT_KEY in response:
         future.set_result(response[RESULT_KEY])
     elif not PENDING_KEY in response:

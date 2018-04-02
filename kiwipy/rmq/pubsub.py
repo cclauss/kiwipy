@@ -57,6 +57,9 @@ class RmqConnector(object):
     def is_connected(self):
         return self._connection is not None and self._connection.is_open
 
+    def loop(self):
+        return self._loop
+
     def get_blocking_connection(self):
         return pika.BlockingConnection(self._connection_params)
 

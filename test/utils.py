@@ -1,6 +1,7 @@
 from future.utils import with_metaclass
 import abc
 import kiwipy
+import kiwipy.exceptions
 from kiwipy import rmq
 import unittest
 
@@ -89,7 +90,7 @@ class CommunicatorTester(with_metaclass(abc.ABCMeta)):
             raise RuntimeError("I cannea do it Captain!")
 
         self.communicator.add_task_subscriber(on_task)
-        with self.assertRaises(kiwipy.RemoteException):
+        with self.assertRaises(kiwipy.exceptions.RemoteException):
             self.communicator.task_send_and_wait(TASK)
 
         self.assertEqual(tasks[0], TASK)
@@ -207,7 +208,7 @@ class CommunicatorTester(with_metaclass(abc.ABCMeta)):
         self.communicator.remove_broadcast_subscriber(broadcast_subscriber)
         # Check that we're unsubscribed
         broadcast_received = kiwipy.Future()
-        with self.assertRaises(kiwipy.TimeoutError):
+        with self.assertRaises(kiwipy.exceptions.TimeoutError):
             self.communicator.await(broadcast_received, timeout=self.WAIT_TIMEOUT)
 
     def test_add_remove_rpc_subscriber(self):
@@ -221,7 +222,7 @@ class CommunicatorTester(with_metaclass(abc.ABCMeta)):
 
         self.communicator.remove_rpc_subscriber(rpc_subscriber.__name__)
         # Check that we're unsubscribed
-        with self.assertRaises((kiwipy.UnroutableError, kiwipy.TimeoutError)):
+        with self.assertRaises((kiwipy.exceptions.UnroutableError, kiwipy.exceptions.TimeoutError)):
             self.communicator.rpc_send_and_wait(rpc_subscriber.__name__, None, timeout=self.WAIT_TIMEOUT)
 
 

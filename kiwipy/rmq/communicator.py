@@ -8,6 +8,7 @@ from tornado.gen import coroutine
 import tornado.ioloop
 import yaml
 
+import kiwipy.exceptions
 from . import defaults
 from . import tasks
 from . import messages
@@ -150,10 +151,10 @@ class RmqSubscriber(pubsub.ConnectionListener):
         identifier = method.routing_key[len('{}.'.format(defaults.RPC_TOPIC)):]
         receiver = self._rpc_subscribers.get(identifier, None)
         if receiver is None:
-            self._channel.basic_reject(method.delivery_tag)
+            yield self._channel.basic_reject(method.delivery_tag)
         else:
             # Tell the sender that we've dealt with it
-            self._channel.basic_ack(method.delivery_tag)
+            yield self._channel.basic_ack(method.delivery_tag)
 
             msg = self._decode(body)
 
@@ -165,7 +166,7 @@ class RmqSubscriber(pubsub.ConnectionListener):
 
                 if isinstance(result, tornado.concurrent.Future):
                     response = utils.pending_response()
-                    self._send_response(ch, props.reply_to, props.correlation_id, response)
+                    yield self._send_response(ch, props.reply_to, props.correlation_id, response)
                     try:
                         response = yield result
                         response = utils.result_response(response)
@@ -178,7 +179,7 @@ class RmqSubscriber(pubsub.ConnectionListener):
             except BaseException as e:
                 response = utils.exception_response(e)
 
-            self._send_response(ch, props.reply_to, props.correlation_id, response)
+            yield self._send_response(ch, props.reply_to, props.correlation_id, response)
 
     @coroutine
     def _on_broadcast(self, ch, method, props, body):
@@ -195,8 +196,9 @@ class RmqSubscriber(pubsub.ConnectionListener):
                               "msg: {}\n"
                               "traceback:\n{}".format(msg, traceback.format_exc()))
 
+    @coroutine
     def _send_response(self, ch, reply_to, correlation_id, response):
-        ch.basic_publish(
+        yield ch.basic_publish(
             exchange='', routing_key=reply_to,
             properties=pika.BasicProperties(correlation_id=correlation_id),
             body=self._response_encode(response)
@@ -325,7 +327,7 @@ class RmqCommunicator(kiwipy.Communicator):
         try:
             return self._message_publisher.rpc_send(recipient_id, msg)
         except pika.exceptions.UnroutableError as e:
-            raise kiwipy.UnroutableError(str(e))
+            raise kiwipy.exceptions.UnroutableError(str(e))
 
     def broadcast_send(self, body, sender=None, subject=None, correlation_id=None):
         return self._message_publisher.broadcast_send(body, sender, subject, correlation_id)
@@ -334,9 +336,9 @@ class RmqCommunicator(kiwipy.Communicator):
         try:
             return self._task_publisher.task_send(msg)
         except pika.exceptions.UnroutableError as e:
-            raise kiwipy.UnroutableError(str(e))
+            raise kiwipy.exceptions.UnroutableError(str(e))
         except pika.exceptions.NackError as e:
-            raise kiwipy.TaskRejected(str(e))
+            raise kiwipy.exceptions.TaskRejected(str(e))
 
     def await(self, future=None, timeout=None):
         # Ensure we're connected
@@ -346,4 +348,4 @@ class RmqCommunicator(kiwipy.Communicator):
         try:
             return self._loop.run_sync(lambda: future, timeout=timeout)
         except tornado.ioloop.TimeoutError as e:
-            raise kiwipy.TimeoutError(str(e))
+            raise kiwipy.exceptions.TimeoutError(str(e))
