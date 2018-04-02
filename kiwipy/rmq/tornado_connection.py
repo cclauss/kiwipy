@@ -321,14 +321,12 @@ class TornadoChannel(object):
 
         self._pending_futures = []
 
-        # Queue consumer generator generator info of type
-        # _QueueConsumerGeneratorInfo created by BlockingChannel.consume
-        self._queue_consumer_generator = None
-
         # Whether RabbitMQ delivery confirmation has been enabled
         self._delivery_confirmation = False
         # These are only used when delivery confirmation is enabled
         self._num_published = 0
+        # Information on sent messages, used to correlate to ack/nack or returned
+        # messages
         self._delivery_info = deque()
 
         # Holds a ReturnedMessage object representing a message received via
@@ -381,7 +379,6 @@ class TornadoChannel(object):
 
     def _cleanup(self):
         """Clean up members that might inhibit garbage collection"""
-        self._queue_consumer_generator = None
         self._num_published = 0
         self._delivery_info = deque()
 
@@ -422,10 +419,6 @@ class TornadoChannel(object):
 
         """
         return self._impl.is_open
-
-    @coroutine
-    def _flush_output(self, *waiters):
-        pass
 
     def _on_puback_message_returned(self, channel, method, properties, body):
         """Called as the result of Basic.Return from broker in
