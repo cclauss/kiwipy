@@ -4,6 +4,7 @@ import logging
 import pika
 import pika.exceptions
 import tornado.gen
+import tornado.concurrent
 from tornado.gen import coroutine
 import tornado.ioloop
 import yaml

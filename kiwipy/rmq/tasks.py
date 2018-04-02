@@ -143,10 +143,11 @@ class RmqTaskSubscriber(messages.BaseConnectionWithExchange):
                 handled = True
 
         if handled:
-            self._task_finished(method.delivery_tag, props.correlation_id, props.reply_to, response)
+            yield self._task_finished(method.delivery_tag, props.correlation_id, props.reply_to, response)
         else:
-            self._channel.basic_reject(delivery_tag=method.delivery_tag)
+            yield self._channel.basic_reject(delivery_tag=method.delivery_tag)
 
+    @coroutine
     def _task_finished(self, delivery_tag, correlation_id, reply_to, response):
         """
         Send an acknowledgement of the task being actioned and a response to the
@@ -156,13 +157,14 @@ class RmqTaskSubscriber(messages.BaseConnectionWithExchange):
         :param method: The message method
         :param response: The response to send to the initiator
         """
-        self._channel.basic_ack(delivery_tag=delivery_tag)
-        self._send_response(correlation_id, reply_to, response)
+        yield self._channel.basic_ack(delivery_tag=delivery_tag)
+        yield self._send_response(correlation_id, reply_to, response)
 
+    @coroutine
     def _send_response(self, correlation_id, reply_to, response):
         # Build full response
         response[utils.HOST_KEY] = utils.get_host_info()
-        self.channel().basic_publish(
+        yield self.channel().basic_publish(
             exchange='',
             routing_key=reply_to,
             body=self._encode(response),

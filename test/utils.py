@@ -3,7 +3,11 @@ import abc
 import kiwipy
 import kiwipy.exceptions
 from kiwipy import rmq
+import sys
+import tornado.gen
+from tornado.gen import coroutine, Return
 import unittest
+import uuid
 
 
 class CommunicatorTester(with_metaclass(abc.ABCMeta)):
@@ -229,6 +233,7 @@ class CommunicatorTester(with_metaclass(abc.ABCMeta)):
 class TestCaseWithLoop(unittest.TestCase):
     def setUp(self):
         super(TestCaseWithLoop, self).setUp()
+        self._cleanup_coros = []
         self.loop = rmq.new_event_loop()
         rmq.set_event_loop(self.loop)
 
@@ -236,3 +241,33 @@ class TestCaseWithLoop(unittest.TestCase):
         self.loop.close()
         self.loop = None
         rmq.set_event_loop(None)
+
+    def addCleanup(self, coro_or_func, *args, **kwargs):
+        if tornado.gen.is_coroutine_function(coro_or_func):
+            self.addCoroCleanup(coro_or_func, *args, **kwargs)
+        else:
+            super(TestCaseWithLoop, self).addCleanup(coro_or_func, *args, **kwargs)
+
+    def addCoroCleanup(self, coro, *args, **kwargs):
+        coro_ = kiwipy.rmq.tornado_connection.ensure_coroutine(coro)
+        self._cleanup_coros.append((coro_, args, kwargs))
+
+    @coroutine
+    def doCoroCleanups(self):
+        """Execute all cleanup functions. Normally called for you during
+        tearDown."""
+        try:
+            result = self._resultForDoCleanups  # Python 2
+        except AttributeError:
+            result = self._outcome  # Python 3
+        ok = True
+        while self._cleanup_coros:
+            coro, args, kwargs = self._cleanup_coros.pop(-1)
+            try:
+                yield coro(*args, **kwargs)
+            except KeyboardInterrupt:
+                raise
+            except:
+                ok = False
+                result.addError(self, sys.exc_info())
+        raise Return(ok)

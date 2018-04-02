@@ -158,5 +158,6 @@ class RmqConnector(object):
 
         """
         if not self._stopping:
-            # Create a new connection
+            # Create a new connection, this will trigger the on_connection_open callback
+            # where will we notify listeners
             yield self.get_connection()
